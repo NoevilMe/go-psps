@@ -18,6 +18,9 @@ type Process interface {
 	// Executable path running this process.
 	ImagePath() string
 
-	// command line with arguments
-	CmdLine() string
+	// Current work directory
+	Cwd() string
+
+	// command line arguments
+	CmdLine() []string
 }

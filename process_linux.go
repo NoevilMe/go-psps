@@ -1,10 +1,12 @@
 package psps
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 )
@@ -22,7 +24,8 @@ type LinuxProcess struct {
 
 	name string
 	imagePath string
-	cmdLine string
+	cmdLine []string
+	cwd string
 }
 
 func (p *LinuxProcess) Pid() int {
@@ -33,6 +36,10 @@ func (p *LinuxProcess) PPid() int {
 	return p.ppid
 }
 
+func (p *LinuxProcess) PGid() int {
+	return p.pgid
+}
+
 func (p *LinuxProcess) Name() string {
 	return p.name
 }
@@ -41,13 +48,19 @@ func (p *LinuxProcess) ImagePath() string {
 	return p.imagePath
 }
 
-func (p *LinuxProcess) CmdLine() string {
+func (p *LinuxProcess) CmdLine() []string {
 	return p.cmdLine
+}
+
+func (p *LinuxProcess) Cwd() string {
+	return p.cwd
 }
 
 // Refresh all the data associated with this process.
 func (p *LinuxProcess) Refresh() error {
-	statPath := fmt.Sprintf("/proc/%d/stat", p.pid)
+	processDir := fmt.Sprintf("/proc/%d", p.pid)
+
+	statPath := path.Join(processDir, "stat")
 	dataBytes, err := ioutil.ReadFile(statPath)
 	if err != nil {
 		return err
@@ -68,24 +81,61 @@ func (p *LinuxProcess) Refresh() error {
 		&p.pgid,
 		&p.sid)
 
+	if err != nil {
+		return err
+	}
+
+	exePath := path.Join(processDir, "exe")
+	fileInfo, err := os.Lstat(exePath)
+	if err != nil {
+		return err
+	}
+	if fileInfo.Mode() & os.ModeSymlink != 0 {
+		link, err := os.Readlink(exePath)
+		if err == nil {
+			p.imagePath = link
+		}
+	}
+
+	cwdPath := path.Join(processDir, "cwd")
+	fileInfo, err = os.Lstat(cwdPath)
+	if err != nil {
+		return err
+	}
+	if fileInfo.Mode() & os.ModeSymlink != 0 {
+		link, err := os.Readlink(cwdPath)
+		if err == nil {
+			p.cwd = link
+		}
+	}
+
+	cmdPath := path.Join(processDir, "cmdline")
+	cmdBytes, err := ioutil.ReadFile(cmdPath)
+	if err != nil {
+		return err
+	}
+	if len(cmdBytes) > 0 {
+		p.cmdLine = strings.Split(string(bytes.TrimRight(cmdBytes, string("\x00"))), string(byte(0)))
+	}
+
 	return err
 }
 
-func findProcess(pid int) (Process, error) {
-	dir := fmt.Sprintf("/proc/%d", pid)
-	_, err := os.Stat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+//func findProcess(pid int) (Process, error) {
+//	dir := fmt.Sprintf("/proc/%d", pid)
+//	_, err := os.Stat(dir)
+//	if err != nil {
+//		if os.IsNotExist(err) {
+//			return nil, nil
+//		}
+//
+//		return nil, err
+//	}
+//
+//	return newLinuxProcess(pid)
+//}
 
-		return nil, err
-	}
-
-	return newUnixProcess(pid)
-}
-
-func processes() ([]Process, error) {
+func Processes() ([]Process, error) {
 	d, err := os.Open("/proc")
 	if err != nil {
 		return nil, err
@@ -121,7 +171,7 @@ func processes() ([]Process, error) {
 				continue
 			}
 
-			p, err := newUnixProcess(int(pid))
+			p, err := newLinuxProcess(int(pid))
 			if err != nil {
 				continue
 			}
@@ -133,7 +183,7 @@ func processes() ([]Process, error) {
 	return results, nil
 }
 
-func newUnixProcess(pid int) (*LinuxProcess, error) {
+func newLinuxProcess(pid int) (*LinuxProcess, error) {
 	p := &LinuxProcess{pid: pid}
 	return p, p.Refresh()
 }
